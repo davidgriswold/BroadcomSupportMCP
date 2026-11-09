@@ -1,13 +1,15 @@
-"""Broadcom Support MCP Server - HTTP Client"""
+"""Broadcom Support MCP Server - HTTP Client."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+from ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,8 @@ HEADERS = {
 
 TIMEOUT = 30.0
 
-# SearchUnify constants
+# Legacy SearchUnify constants are retained for compatibility with the
+# original implementation; current searches use DDGS instead.
 SU_SEARCH_URL = "https://searchunify.broadcom.com/search/searchResultHL"
 SU_TOKEN_URL = "https://support.broadcom.com/web/ecx/search/-/searchUnify/suRefreshToken"
 SU_UID = "d042dbba-f8c4-11ea-beba-0242ac12000b"
@@ -72,45 +75,62 @@ class BroadcomClient:
         self,
         query: str,
         segment: str = "all",
-        max_results: int = 10,
+        max_results: int = 5,
     ) -> list[dict]:
-        """SearchUnify APIでナレッジベース記事を検索する。"""
-        jwt = await self._ensure_jwt()
+        """Search public Broadcom KB articles with DDGS.
 
-        body: dict[str, Any] = {
-            "langAttr": "en",
-            "react": 1,
-            "searchString": query,
-            "from": 0,
-            "sortby": "_score",
-            "orderBy": "desc",
-            "pageNo": 1,
-            "aggregations": [{"type": "language", "filter": ["en"]}],
-            "uid": SU_UID,
-            "resultsPerPage": max_results,
-            "language": "en",
-            "accessToken": SU_ACCESS_TOKEN,
-            "authtoken": jwt,
-            "supportCheck": True,
-            "versionResults": True,
-        }
+        Search requests use a site restriction, and returned URLs are also
+        filtered to the public Broadcom KB. The segment parameter is retained
+        for MCP compatibility but is not applied to DDGS searches.
 
-        try:
-            resp = await self._client.post(
-                SU_SEARCH_URL,
-                json=body,
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as exc:
-            logger.error("Search request failed: %s", exc)
-            return []
-        except Exception as exc:
-            logger.error("Search parse error: %s", exc)
-            return []
+        DDGS exposes a synchronous search API, so requests run in a worker
+        thread to avoid blocking the MCP server's asyncio event loop. One
+        short retry handles occasional transient DDGS backend failures.
+        """
+        search_query = f"site:knowledge.broadcom.com/external/article/ {query}"
 
-        return self._parse_search_response(data, max_results)
+        def run_search() -> list[dict]:
+            with DDGS() as ddgs:
+                return list(ddgs.text(search_query, max_results=max_results))
+
+        for attempt in range(2):
+            try:
+                hits = await asyncio.to_thread(run_search)
+                break
+            except Exception as exc:
+                logger.warning(
+                    "DDGS search attempt %d failed: %s",
+                    attempt + 1,
+                    exc,
+                )
+                if attempt == 0:
+                    await asyncio.sleep(2)
+                else:
+                    raise RuntimeError(
+                        "Broadcom KB search failed after two attempts"
+                    ) from exc
+
+        results: list[dict] = []
+        for hit in hits:
+            url = hit.get("href", "")
+            parsed = urlparse(url)
+
+            # Never return off-site or non-HTTPS search hits.
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "knowledge.broadcom.com"
+                or not parsed.path.startswith("/external/article/")
+            ):
+                continue
+
+            results.append({
+                "title": hit.get("title", ""),
+                "url": url,
+                "summary": (hit.get("body") or "")[:300],
+                "segment": "",
+            })
+
+        return results
 
     def _parse_search_response(self, data: dict, max_results: int) -> list[dict]:
         """SearchUnify APIレスポンスをパースする。"""
@@ -243,3 +263,4 @@ class BroadcomClient:
             if name and content:
                 metadata[name] = content
         return metadata
+
