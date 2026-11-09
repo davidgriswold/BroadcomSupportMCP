@@ -1,5 +1,7 @@
 """Broadcom Support MCP Server."""
 
+import argparse
+
 from fastmcp import FastMCP
 from .client import BroadcomClient
 
@@ -75,11 +77,46 @@ async def read_documentation(url: str) -> dict:
     """
     return await _client.read_article(url=url)
 
-
 def main() -> None:
-    """Entry point for the Broadcom Support MCP Server."""
-    mcp.run(transport="stdio")
+    """Start the MCP server using the selected transport.
 
+    Defaults to stdio for backward compatibility. HTTP mode uses
+    Streamable HTTP and binds to localhost unless explicitly configured.
+    """
+    parser = argparse.ArgumentParser(
+        description="Broadcom Support Knowledge Base MCP Server"
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help="MCP transport (default: stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="HTTP bind address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="HTTP listening port (default: 8000)",
+    )
+
+    args = parser.parse_args()
+
+    if args.transport == "http":
+        if not 1 <= args.port <= 65535:
+            parser.error("--port must be between 1 and 65535")
+
+        mcp.run(
+            transport="http",
+            host=args.host,
+            port=args.port,
+        )
+    else:
+        mcp.run(transport="stdio")
 
 if __name__ == "__main__":
     main()

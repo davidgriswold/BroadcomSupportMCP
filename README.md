@@ -75,6 +75,73 @@ broadcom-support-mcp-server/.venv/bin/pytest broadcom-support-mcp-server/tests/ 
 
 SearchUnify API の仕組みや内部アーキテクチャについては [ARCHITECTURE.md](./ARCHITECTURE.md) を参照してください。
 
+
+## Streamable HTTP Transport (English)
+
+In addition to the default stdio transport, the server supports
+Streamable HTTP for network-connected MCP clients.
+
+### Starting the server
+
+Install dependencies from the repository root:
+
+```bash
+uv sync
+```
+
+Start with the default stdio transport:
+
+```bash
+uv run broadcom-support-mcp-server
+```
+
+Start with Streamable HTTP:
+
+```bash
+uv run broadcom-support-mcp-server --transport http
+```
+
+The default HTTP endpoint is:
+
+`http://127.0.0.1:8000/mcp`
+
+To configure the listening interface and port:
+
+```bash
+uv run broadcom-support-mcp-server \
+  --transport http \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+### Connecting remote MCP clients
+
+Configure an MCP client that supports Streamable HTTP to connect to
+the server's `/mcp` endpoint.
+
+The server must be reachable from the MCP client. Binding to
+`127.0.0.1` allows local connections only.
+
+### Security
+
+HTTP mode does not configure client authentication.
+
+Do not expose an unauthenticated MCP server directly to the
+internet. For remote access, use an appropriately secured network
+and an authenticated reverse proxy or other access-control layer.
+
+The server also relies on undocumented Broadcom SearchUnify
+interfaces, which may change without notice.
+
+### Running tests
+
+```bash
+uv run pytest -q
+```
+
+The CLI tests verify transport selection, configuration, and
+argument validation without starting a network listener.
+
 ## ライセンス
 
 Apache License 2.0

@@ -3,7 +3,8 @@
 ## 概要
 
 Broadcom Support Portal のナレッジベース検索機能を MCP (Model Context Protocol) ツールとして提供するサーバー。
-FastMCP フレームワークを使用し、stdio トランスポートで動作する。
+FastMCP フレームワークを使用し、stdio（デフォルト）および
+Streamable HTTP トランスポートに対応する。
 
 ## アーキテクチャ
 
@@ -22,6 +23,70 @@ client.py (BroadcomClient)
   │
   └─ GET  techdocs.broadcom.com/...  → 記事取得 + HTML→Markdown 変換
 ```
+
+## Transport Architecture (English)
+
+The server supports two MCP transports using FastMCP's native
+transport implementations.
+
+| Transport | Usage | Default |
+|-----------|-------|---------|
+| stdio | Local MCP clients | Yes |
+| Streamable HTTP | Network-connected MCP clients | No |
+
+### Request Flow
+
+```text
+Local MCP Client
+    |
+    | stdio (JSON-RPC)
+    |
+    +------------------+
+                       |
+Remote MCP Client      |
+    |                  |
+    | Streamable HTTP  |
+    |                  |
+    +------------------+
+                       |
+                       v
+                 FastMCP Server
+                       |
+                       v
+                 BroadcomClient
+                       |
+                 +-----+------+
+                 |            |
+                 v            v
+          SearchUnify     Article Retrieval
+```
+
+### HTTP Configuration
+
+HTTP mode is enabled using `--transport http`.
+
+- Default bind address: `127.0.0.1`
+- Default port: `8000`
+- Default endpoint: `/mcp`
+- Authentication: Not implemented by this application
+
+The `--host` and `--port` arguments configure the listener.
+
+The server binds to localhost by default to avoid unintentionally
+exposing its tools to other network clients.
+
+For remote deployment, access control must be provided separately.
+
+### Compatibility
+
+The stdio transport remains the default to preserve compatibility
+with existing MCP client configurations.
+
+Both transports expose the same `search_documentation` and
+`read_documentation` tools.
+
+Transport selection does not change the Broadcom Support API
+integration or its dependency on undocumented SearchUnify endpoints.
 
 ## 検索 API の仕組み
 
