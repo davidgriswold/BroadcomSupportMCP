@@ -21,20 +21,6 @@ _client = BroadcomClient()
         "Returns a list of relevant articles with titles, URLs, and snippets."
     ),
 )
-@mcp.tool(
-    name="search_documentation",
-    description=(
-        "Search the Broadcom Support knowledge base for articles matching the query. "
-        "Returns a list of relevant articles with titles, URLs, and snippets."
-    ),
-)
-@mcp.tool(
-    name="search_documentation",
-    description=(
-        "Search the Broadcom Support knowledge base for articles matching the query. "
-        "Returns a list of relevant articles with titles, URLs, and snippets."
-    ),
-)
 async def search_documentation(query: str, segment: str = "all") -> str:
     """Search Broadcom Support knowledge base.
 
@@ -50,13 +36,6 @@ async def search_documentation(query: str, segment: str = "all") -> str:
     return json.dumps({"query": query, "segment": segment, "results": results}, ensure_ascii=False, indent=2)
 
 
-@mcp.tool(
-    name="read_documentation",
-    description=(
-        "Retrieve the full content of a Broadcom Support article at the given URL. "
-        "Returns the article title, body text, and metadata."
-    ),
-)
 @mcp.tool(
     name="read_documentation",
     description=(
