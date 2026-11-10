@@ -71,66 +71,125 @@ class BroadcomClient:
             self._jwt = ""
         return self._jwt
 
+
     async def search(
         self,
         query: str,
         segment: str = "all",
         max_results: int = 5,
     ) -> list[dict]:
-        """Search public Broadcom KB articles with DDGS.
+        """Search Broadcom KB articles using configurable DDGS backends.
 
-        Search requests use a site restriction, and returned URLs are also
-        filtered to the public Broadcom KB. The segment parameter is retained
-        for MCP compatibility but is not applied to DDGS searches.
+        Backends are attempted in priority order. A backend is considered
+        successful only when it returns valid Broadcom KB article URLs.
 
-        DDGS exposes a synchronous search API, so requests run in a worker
-        thread to avoid blocking the MCP server's asyncio event loop. One
-        short retry handles occasional transient DDGS backend failures.
+        DDGS is synchronous, so each search runs outside the asyncio event
+        loop. Search failures are logged without treating them as evidence
+        that no matching documentation exists.
+
+        The segment parameter is retained for MCP compatibility.
         """
-        search_query = f"site:knowledge.broadcom.com/external/article/ {query}"
+        import os
+        import time
 
-        def run_search() -> list[dict]:
-            with DDGS() as ddgs:
-                return list(ddgs.text(search_query, max_results=max_results))
+        search_query = (
+            f"site:knowledge.broadcom.com/external/article/ {query}"
+        )
 
-        for attempt in range(2):
+        backends = [
+            name.strip().lower()
+            for name in os.getenv(
+                "DDGS_BACKENDS",
+                "yahoo,startpage,brave,mojeek",
+            ).split(",")
+            if name.strip()
+        ]
+
+        if not backends:
+            raise ValueError("DDGS_BACKENDS contains no search backends")
+
+        # Provider identifiers observed in DDGS 9.16.1.
+        providers = {
+            "yahoo": "bing",
+            "duckduckgo": "bing",
+            "startpage": "google",
+            "brave": "brave",
+            "mojeek": "mojeek",
+        }
+
+        failures = []
+
+        for backend in backends:
+            started = time.monotonic()
+
+            def run_search() -> list[dict]:
+                with DDGS(timeout=10) as ddgs:
+                    return list(ddgs.text(
+                        search_query,
+                        backend=backend,
+                        max_results=max_results,
+                    ))
+
             try:
                 hits = await asyncio.to_thread(run_search)
-                break
             except Exception as exc:
+                elapsed = time.monotonic() - started
+                failures.append((backend, str(exc)))
+
                 logger.warning(
-                    "DDGS search attempt %d failed: %s",
-                    attempt + 1,
+                    "DDGS backend=%s provider=%s "
+                    "duration=%.2fs status=error error=%r",
+                    backend,
+                    providers.get(backend, "unknown"),
+                    elapsed,
                     exc,
                 )
-                if attempt == 0:
-                    await asyncio.sleep(2)
-                else:
-                    raise RuntimeError(
-                        "Broadcom KB search failed after two attempts"
-                    ) from exc
-
-        results: list[dict] = []
-        for hit in hits:
-            url = hit.get("href", "")
-            parsed = urlparse(url)
-
-            # Never return off-site or non-HTTPS search hits.
-            if (
-                parsed.scheme != "https"
-                or parsed.hostname != "knowledge.broadcom.com"
-                or not parsed.path.startswith("/external/article/")
-            ):
                 continue
 
-            results.append({
-                "title": hit.get("title", ""),
-                "url": url,
-                "summary": (hit.get("body") or "")[:300],
-                "segment": "",
-            })
+            results = []
+            for hit in hits:
+                url = hit.get("href", "")
+                parsed = urlparse(url)
 
-        return results
+                # Accept only official HTTPS Broadcom KB articles.
+                if (
+                    parsed.scheme != "https"
+                    or parsed.hostname != "knowledge.broadcom.com"
+                    or not parsed.path.startswith("/external/article/")
+                ):
+                    continue
+
+                results.append({
+                    "title": hit.get("title", ""),
+                    "url": url,
+                    "summary": (hit.get("body") or "")[:300],
+                    "segment": "",
+                })
+
+            elapsed = time.monotonic() - started
+
+            logger.info(
+                "DDGS backend=%s provider=%s "
+                "duration=%.2fs raw=%d valid=%d",
+                backend,
+                providers.get(backend, "unknown"),
+                elapsed,
+                len(hits),
+                len(results),
+            )
+
+            if results:
+                return results
+
+        # Preserve the distinction between an unsuccessful search
+        # and a confirmed absence of matching articles.
+        if failures:
+            raise RuntimeError(
+                "Broadcom KB search exhausted all backends; "
+                f"{len(failures)} backend(s) reported errors"
+            )
+
+        return []
 
     def _parse_search_response(self, data: dict, max_results: int) -> list[dict]:
         """SearchUnify APIレスポンスをパースする。"""
