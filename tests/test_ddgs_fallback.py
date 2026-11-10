@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from broadcom_support_mcp_server.client import BroadcomClient
-
+from ddgs.exceptions import DDGSException
 
 KB_URL = (
     "https://knowledge.broadcom.com/external/article/"
@@ -73,7 +73,7 @@ def test_backend_failure_triggers_fallback(
     monkeypatch.setenv("DDGS_BACKENDS", "yahoo,startpage")
 
     fake_ddgs.responses = {
-        "yahoo": RuntimeError("Simulated provider failure"),
+        "yahoo": DDGSException("Yahoo reported a temporary search failure"),
         "startpage": [{"href": KB_URL, "title": "VKS Shutdown"}],
     }
 
