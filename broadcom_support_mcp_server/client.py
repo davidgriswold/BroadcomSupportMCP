@@ -25,14 +25,6 @@ HEADERS = {
 
 TIMEOUT = 30.0
 
-# Legacy SearchUnify constants are retained for compatibility with the
-# original implementation; current searches use DDGS instead.
-SU_SEARCH_URL = "https://searchunify.broadcom.com/search/searchResultHL"
-SU_TOKEN_URL = "https://support.broadcom.com/web/ecx/search/-/searchUnify/suRefreshToken"
-SU_UID = "d042dbba-f8c4-11ea-beba-0242ac12000b"
-SU_ACCESS_TOKEN = "b72cbbab2728563ec74e93aa3223a7dc"
-
-
 class BroadcomClient:
     BASE_URL = "https://support.broadcom.com"
 
@@ -49,28 +41,6 @@ class BroadcomClient:
 
     async def __aexit__(self, *args: Any) -> None:
         await self._client.aclose()
-
-    async def _ensure_jwt(self) -> str:
-        """SearchUnify用のJWTトークンを取得する。"""
-        if self._jwt:
-            return self._jwt
-        try:
-            resp = await self._client.post(
-                SU_TOKEN_URL,
-                json={
-                    "user_id": "support_portal_su_user",
-                    "firstname": "support_portal_su_user",
-                    "loggedIn": False,
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            self._jwt = resp.text.strip()
-        except httpx.HTTPError as exc:
-            logger.error("Failed to obtain JWT: %s", exc)
-            self._jwt = ""
-        return self._jwt
-
 
     async def search(
         self,
@@ -168,7 +138,7 @@ class BroadcomClient:
 
             elapsed = time.monotonic() - started
 
-            logger.info(
+            logger.warning(
                 "DDGS backend=%s provider=%s "
                 "duration=%.2fs raw=%d valid=%d",
                 backend,
@@ -191,43 +161,6 @@ class BroadcomClient:
 
         return []
 
-    def _parse_search_response(self, data: dict, max_results: int) -> list[dict]:
-        """SearchUnify APIレスポンスをパースする。"""
-        results: list[dict] = []
-        hits = data.get("result", {}).get("hits", [])
-
-        for hit in hits[:max_results]:
-            url = hit.get("_id", "")
-            highlight = hit.get("highlight", {})
-
-            # タイトルからハイライトマーカーを除去
-            raw_title = (highlight.get("title.en") or [""])[0]
-            title = (
-                raw_title
-                .replace("___su-highlight-start___", "")
-                .replace("___su-highlight-end___", "")
-                .strip()
-            )
-
-            # サマリーからハイライトマーカーを除去
-            raw_summary = (highlight.get("content.en") or [""])[0]
-            summary = (
-                raw_summary
-                .replace("___su-highlight-start___", "")
-                .replace("___su-highlight-end___", "")
-                .strip()
-            )
-
-            if title or url:
-                results.append({
-                    "title": title,
-                    "url": url,
-                    "summary": summary[:300],
-                    "segment": "",
-                })
-
-        return results
-
     async def read_article(self, url: str) -> dict:
         """指定URLのナレッジベース記事を取得してパースする。"""
         try:
@@ -241,12 +174,22 @@ class BroadcomClient:
             return {"title": "", "content": "", "url": url, "metadata": {}, "error": str(exc)}
 
         soup = BeautifulSoup(response.text, "html.parser")
-        return {
+
+        article = {
             "title": self._extract_title(soup),
             "content": self._extract_content(soup),
             "url": url,
             "metadata": self._extract_metadata(soup),
         }
+
+        logger.warning(
+            "Broadcom KB retrieved url=%s status=%d content_chars=%d",
+            url,
+            response.status_code,
+            len(article["content"]),
+        )
+
+        return article
 
     def _extract_title(self, soup: BeautifulSoup) -> str:
         og_title = soup.find("meta", property="og:title")
